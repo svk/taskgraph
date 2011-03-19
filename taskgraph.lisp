@@ -1,3 +1,4 @@
+(in-package :taskgraph)
 
 (defclass task ()
   ((id :initarg :id
@@ -175,5 +176,4 @@
    (get-starting-tasks graph)
    (get-task-ordering graph)))
 
-    
- 
+  
