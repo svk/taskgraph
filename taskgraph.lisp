@@ -9,12 +9,52 @@
 (defun make-task (id)
   (make-instance 'task :id id))
 
-(defstruct graph
-  (tasks nil)
-  (dependencies (make-hash-table))
-  (dependents (make-hash-table))
-  (taskmap (make-hash-table :test #'equal)))
+(defclass graph ()
+  ((tasks :initform nil
+	  :accessor graph-tasks)
+   (dependencies :initform (make-hash-table)
+		 :accessor graph-dependencies)
+   (dependents :initform (make-hash-table)
+	       :accessor graph-dependents)
+   (taskmap :initform (make-hash-table)
+	    :accessor graph-taskmap)))
 
+(defmethod serialize ((task task))
+  (list (task-id task)))
+
+(defmethod serialize ((graph graph))
+  (with-slots (tasks dependencies)
+      graph
+    (list (mapcar #'serialize tasks)
+	  (let ((edges nil))
+	    (maphash #'(lambda (task dependencies)
+			 (dolist (dependency dependencies)
+			   (push (list (task-id dependency)
+				       (task-id task))
+				 edges)))
+		     dependencies)
+	    edges))))
+
+(defun write-graph-to-file (graph filename)
+  (with-open-file (stream filename :direction :output :if-exists :overwrite)
+    (write (serialize graph) :stream stream)))
+
+(defun make-graph ()
+  (make-instance 'graph))
+
+(defun unserialize-graph (serialized-graph task-maker)
+  (let ((rv (make-graph)))
+    (dolist (serialized-task (car serialized-graph))
+      (format t "~a~%" serialized-task)
+      (insert-task rv (apply task-maker serialized-task)))
+    (dolist (edge (cadr serialized-graph))
+      (add-dependency rv (car edge) (cadr edge)))
+    rv))
+
+(defun read-graph-from-file (filename task-maker)
+  (with-open-file (stream filename)
+    (unserialize-graph (read stream) task-maker)))
+    
 (defun graph-task (graph id)
   (gethash id (graph-taskmap graph)))
 
@@ -53,9 +93,8 @@
       graph
     (multiple-value-bind (value present-p)
 	(gethash (task-id task) taskmap)
-      (declare (ignore value))
       (when present-p
-	(error "task already present"))
+	(error (format nil "task collision: ~a (old) vs ~a (new)" value task)))
       (setf (gethash (task-id task) taskmap) task)
       (push task tasks))))
 
@@ -80,6 +119,16 @@
     (remove-if #'(lambda (task) (gethash task dependencies))
 	       tasks)))
 
+(defun graph-has-cycles? (graph)
+  (< (length (get-task-ordering graph))
+     (length (graph-tasks graph))))
+
+(defun get-graph-problems (graph)
+  (let ((rv nil))
+    (when (graph-has-cycles? graph)
+      (push :has-cycle rv))
+    rv))
+
 (defun get-task-ordering (graph)
   "Get a topologically sorted ordering of the tasks in the graph. If there are cycles in the graph, this method will return an incomplete list of tasks, accomplishing as much as can be done without entering the cycles."
   (do ((removed-dependents (make-hash-table))
@@ -97,7 +146,7 @@
 				(gethash (task-id m) removed-dependencies))
 	  (push m s))))))
 
-(defun test-topological-sort ()
+(defun make-testing-graph ()
   (let ((graph (make-graph)))
     (insert-task graph (make-task 'build-foundation))
     (insert-task graph (make-task 'build-walls))
@@ -113,7 +162,18 @@
     (add-dependency graph 'paint-house-inside 'furnish-house)
     (add-dependency graph 'paint-house-outside 'move-in)
     (add-dependency graph 'furnish-house 'move-in)
-    (get-task-ordering graph)))
+    (add-dependency graph 'move-in 'build-foundation)
+    (remove-dependency graph 'move-in 'build-foundation)
+    (insert-task graph (make-task 'meet-neighbours))
+    (insert-task graph (make-task 'invite-neighbours-to-dinner))
+    (add-dependency graph 'move-in 'invite-neighbours-to-dinner)
+    graph))
+
+(defun run-tests (graph)
+  (list
+   (get-graph-problems graph)
+   (get-starting-tasks graph)
+   (get-task-ordering graph)))
 
     
  
