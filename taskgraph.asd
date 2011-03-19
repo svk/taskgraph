@@ -1,5 +1,5 @@
 (asdf:defsystem #:taskgraph
     :depends-on ()
-    :components ((:file "package.lisp")
-		 (:file "taskgraph.lisp"
+    :components ((:file "package")
+		 (:file "taskgraph"
 			:depends-on ("package"))))
