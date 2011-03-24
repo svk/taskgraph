@@ -25,7 +25,7 @@
 (defmethod serialize ((mtask mtask))
   (with-slots (id name epsilon)
       mtask
-    (list id name epsilon)))
+    (list id name :epsilon epsilon)))
 
 (defmethod serialize ((task task))
   (with-slots (id epsilon)
@@ -117,8 +117,9 @@
 	 (fn (cadr args)))
     `(let ((,gs (read-graph-from-file ,fn)))
        (unwind-protect
-	    (progn ,@body)
-	 (write-graph-to-file ,gs ,fn)))))
+	    (progn
+	      ,@body
+	      (write-graph-to-file ,gs ,fn))))))
     
 (defun graph-task (graph id)
   (gethash id (graph-taskmap graph)))
@@ -198,9 +199,39 @@
 	       (remove-if #'(lambda (task) (unmet-dependencies graph task))
 			  tasks))))
 
+(defun take-until (element list &key (test #'eql))
+  (if (funcall test element (car list))
+      nil
+      (cons (car list) (take-until element (cdr list) :test test))))
+
+(defun graph-find-cycle (graph &optional (exclude nil))
+  (let ((nodes (nset-difference (mapcar #'task-id (graph-tasks graph))
+				exclude))
+	(cycle nil))
+    (labels ((explore (node)
+	       (when (find node cycle)
+		 (return-from graph-find-cycle (take-until node cycle)))
+	       (push node cycle)
+	       (dolist (dep (mapcar #'task-id (task-dependencies graph node)))
+		 (unless (not (find dep nodes))
+		   (explore dep)))
+	       (setf nodes (remove node nodes))
+	       (pop cycle)))
+      (mapcar #'explore nodes)
+      nil)))
+
+(defun graph-find-cycles (graph)
+  "This function behaves a bit arbitrarily on interlocking cycles, only ever reporting a node as part of zero or one cycles, but determines distinct cycles accurately."
+  (do* ((exclude nil)
+	(cycle (graph-find-cycle graph exclude) (graph-find-cycle graph exclude))
+	(cycles nil))
+       ((null cycle) cycles)
+    (push cycle cycles)
+    (dolist (x cycle)
+      (pushnew x exclude))))
+
 (defun graph-has-cycles? (graph)
-  (< (length (get-task-ordering graph))
-     (length (remove-if #'task-is-epsilon? (graph-tasks graph)))))
+  (graph-find-cycle graph))
 
 (defun get-graph-problems (graph)
   (let ((rv nil))
@@ -235,17 +266,7 @@
     (insert-task graph (make-task 'paint-house-inside))
     (insert-task graph (make-task 'furnish-house))
     (insert-task graph (make-task 'move-in))
-    (insert-task graph (make-task 'want-to-build-house))
-    (insert-task graph (make-task 'settle-down))
-    (insert-task graph (make-task 'zen-alpha))
-    (insert-task graph (make-task 'zen-beta))
-    (mark-as-epsilon (graph-task graph 'want-to-build-house))
-    (mark-as-epsilon (graph-task graph 'zen-alpha))
-    (mark-as-epsilon (graph-task graph 'zen-beta))
-    (add-dependency graph 'zen-alpha 'move-in)
 
-    (add-dependency graph 'settle-down 'want-to-build-house)
-    (add-dependency graph 'want-to-build-house 'build-foundation)
     (add-dependency graph 'build-foundation 'build-walls)
     (add-dependency graph 'build-walls 'build-roof)
     (add-dependency graph 'build-roof 'paint-house-inside)
@@ -253,8 +274,9 @@
     (add-dependency graph 'paint-house-inside 'furnish-house)
     (add-dependency graph 'paint-house-outside 'move-in)
     (add-dependency graph 'furnish-house 'move-in)
+
     (add-dependency graph 'move-in 'build-foundation)
-    (remove-dependency graph 'move-in 'build-foundation)
+
     (insert-task graph (make-task 'meet-neighbours))
     (insert-task graph (make-task 'invite-neighbours-to-dinner))
     (add-dependency graph 'move-in 'invite-neighbours-to-dinner)
