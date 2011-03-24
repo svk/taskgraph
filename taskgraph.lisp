@@ -4,7 +4,10 @@
 
 (defclass task ()
   ((id :initarg :id
-       :reader task-id)))
+       :reader task-id)
+   (epsilon :initform nil
+	    :initarg :epsilon
+	    :reader task-is-epsilon?)))
 
 (defclass mtask (task)
   ((name :initarg :name
@@ -16,14 +19,22 @@
 (defmethod print-object ((mtask mtask) stream)
   (format stream "[~a: ~a]" (task-id mtask) (mtask-name mtask)))
 
-(defun make-task (id)
-  (make-instance 'task :id id))
+(defun make-task (id &key (epsilon nil))
+  (make-instance 'task :id id :epsilon epsilon))
 
 (defmethod serialize ((mtask mtask))
-  (list (task-id mtask) (mtask-name mtask)))
+  (with-slots (id name epsilon)
+      mtask
+    (list id name epsilon)))
 
-(defun make-mtask (id name)
-  (make-instance 'mtask :id id :name name))
+(defmethod serialize ((task task))
+  (with-slots (id epsilon)
+      task
+    (list id epsilon)))
+
+
+(defun make-mtask (id name &key (epsilon nil))
+  (make-instance 'mtask :id id :name name :epsilon epsilon))
 
 (defmacro bless-task-constructor (name fobj)
   `(setf (gethash ,name *blessed-task-constructors*) ,fobj))
@@ -45,9 +56,6 @@
 	    :accessor graph-taskmap)
    (constructor :initarg :constructor)))
 
-(defmethod serialize ((task task))
-  (list (task-id task)))
-
 (defun serialize-edges (graph)
   (with-slots (tasks dependencies constructor)
       graph
@@ -60,6 +68,16 @@
 			     edges))))
 	       dependencies)
       edges)))
+
+(defun mark-as-epsilon (task)
+  (with-slots (epsilon)
+      task
+    (setf epsilon t)))
+
+(defun mark-as-non-epsilon (task)
+  (with-slots (epsilon)
+      task
+    (setf epsilon nil)))
 
 (defmethod serialize ((graph graph))
   (with-slots (tasks dependencies constructor)
@@ -159,16 +177,30 @@
 	(remove-dependency graph task value))
       value)))
 
+(let ((u-d-stack nil))
+  (defun unmet-dependencies (graph task)
+    (push task u-d-stack)
+    (with-slots (dependencies)
+	graph
+      (let ((result (remove-if
+		     #'(lambda (dep) (and (task-is-epsilon? dep)
+					  (null (find dep u-d-stack))
+					  (null (unmet-dependencies graph dep))))
+		     (gethash task dependencies))))
+	(pop u-d-stack)
+	result))))
+
 (defun get-starting-tasks (graph)
   "Get the set of tasks that have no unmet dependencies."
   (with-slots (tasks dependencies)
       graph
-    (remove-if #'(lambda (task) (gethash task dependencies))
-	       tasks)))
+    (remove-if #'task-is-epsilon?
+	       (remove-if #'(lambda (task) (unmet-dependencies graph task))
+			  tasks))))
 
 (defun graph-has-cycles? (graph)
   (< (length (get-task-ordering graph))
-     (length (graph-tasks graph))))
+     (length (remove-if #'task-is-epsilon? (graph-tasks graph)))))
 
 (defun get-graph-problems (graph)
   (let ((rv nil))
@@ -184,7 +216,8 @@
        (s (get-starting-tasks graph)))
       ((null s) (reverse l))
     (let ((n (pop s)))
-      (push n l)
+      (unless (task-is-epsilon? n)
+	(push n l))
       (dolist (m (set-difference (task-dependents graph (task-id n))
 				 (gethash (task-id n) removed-dependents)))
 	(push m (gethash (task-id n) removed-dependents))
@@ -202,6 +235,17 @@
     (insert-task graph (make-task 'paint-house-inside))
     (insert-task graph (make-task 'furnish-house))
     (insert-task graph (make-task 'move-in))
+    (insert-task graph (make-task 'want-to-build-house))
+    (insert-task graph (make-task 'settle-down))
+    (insert-task graph (make-task 'zen-alpha))
+    (insert-task graph (make-task 'zen-beta))
+    (mark-as-epsilon (graph-task graph 'want-to-build-house))
+    (mark-as-epsilon (graph-task graph 'zen-alpha))
+    (mark-as-epsilon (graph-task graph 'zen-beta))
+    (add-dependency graph 'zen-alpha 'move-in)
+
+    (add-dependency graph 'settle-down 'want-to-build-house)
+    (add-dependency graph 'want-to-build-house 'build-foundation)
     (add-dependency graph 'build-foundation 'build-walls)
     (add-dependency graph 'build-walls 'build-roof)
     (add-dependency graph 'build-roof 'paint-house-inside)
