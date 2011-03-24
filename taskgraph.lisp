@@ -1,14 +1,38 @@
 (in-package :taskgraph)
 
+(defparameter *blessed-task-constructors* (make-hash-table :test #'eq))
+
 (defclass task ()
   ((id :initarg :id
        :reader task-id)))
 
+(defclass mtask (task)
+  ((name :initarg :name
+	 :accessor mtask-name)))
+
 (defmethod print-object ((task task) stream)
   (format stream "[~a]" (task-id task)))
 
+(defmethod print-object ((mtask mtask) stream)
+  (format stream "[~a: ~a]" (task-id mtask) (mtask-name mtask)))
+
 (defun make-task (id)
   (make-instance 'task :id id))
+
+(defmethod serialize ((mtask mtask))
+  (list (task-id mtask) (mtask-name mtask)))
+
+(defun make-mtask (id name)
+  (make-instance 'mtask :id id :name name))
+
+(defmacro bless-task-constructor (name fobj)
+  `(setf (gethash ,name *blessed-task-constructors*) ,fobj))
+
+(bless-task-constructor 'task #'make-task)
+(bless-task-constructor 'mtask #'make-mtask)
+
+(defun get-blessed-constructor (fsym)
+  (gethash fsym *blessed-task-constructors*))
 
 (defclass graph ()
   ((tasks :initform nil
@@ -18,43 +42,65 @@
    (dependents :initform (make-hash-table)
 	       :accessor graph-dependents)
    (taskmap :initform (make-hash-table)
-	    :accessor graph-taskmap)))
+	    :accessor graph-taskmap)
+   (constructor :initarg :constructor)))
 
 (defmethod serialize ((task task))
   (list (task-id task)))
 
-(defmethod serialize ((graph graph))
-  (with-slots (tasks dependencies)
+(defun serialize-edges (graph)
+  (with-slots (tasks dependencies constructor)
       graph
-    (list (mapcar #'serialize tasks)
-	  (let ((edges nil))
-	    (maphash #'(lambda (task dependencies)
-			 (dolist (dependency dependencies)
-			   (push (list (task-id dependency)
-				       (task-id task))
-				 edges)))
-		     dependencies)
-	    edges))))
+    (let ((edges nil))
+      (maphash #'(lambda (task dependencies)
+		   (dolist (dependency dependencies)
+		     (when dependency
+		       (push (list (task-id dependency)
+				 (task-id task))
+			     edges))))
+	       dependencies)
+      edges)))
+
+(defmethod serialize ((graph graph))
+  (with-slots (tasks dependencies constructor)
+      graph
+    (list constructor
+	  (mapcar #'serialize tasks)
+	  (serialize-edges graph))))
 
 (defun write-graph-to-file (graph filename)
   (with-open-file (stream filename :direction :output :if-exists :overwrite)
     (write (serialize graph) :stream stream)))
 
-(defun make-graph ()
-  (make-instance 'graph))
+(defun make-graph (constructor-name)
+  (make-instance 'graph :constructor constructor-name))
 
-(defun unserialize-graph (serialized-graph task-maker)
-  (let ((rv (make-graph)))
-    (dolist (serialized-task (car serialized-graph))
-      (format t "~a~%" serialized-task)
+(defun add-task (graph &rest rest)
+  (with-slots (constructor)
+      graph
+    (insert-task graph (apply (get-blessed-constructor constructor) rest))))
+
+(defun unserialize-graph (serialized-graph)
+  (let* ((task-maker-name (car serialized-graph))
+	 (task-maker (get-blessed-constructor task-maker-name))
+	 (rv (make-graph task-maker-name)))
+    (dolist (serialized-task (cadr serialized-graph))
       (insert-task rv (apply task-maker serialized-task)))
-    (dolist (edge (cadr serialized-graph))
+    (dolist (edge (caddr serialized-graph))
       (add-dependency rv (car edge) (cadr edge)))
     rv))
 
-(defun read-graph-from-file (filename task-maker)
+(defun read-graph-from-file (filename)
   (with-open-file (stream filename)
-    (unserialize-graph (read stream) task-maker)))
+    (unserialize-graph (read stream))))
+
+(defmacro with-graph-in-file (args &body body)
+  (let* ((gs (car args))
+	 (fn (cadr args)))
+    `(let ((,gs (read-graph-from-file ,fn)))
+       (unwind-protect
+	    (progn ,@body)
+	 (write-graph-to-file ,gs ,fn)))))
     
 (defun graph-task (graph id)
   (gethash id (graph-taskmap graph)))
@@ -76,9 +122,9 @@
       graph
     (let ((ent (graph-task graph dependent-id))
 	  (ency (graph-task graph dependency-id)))
-      (format t "adding ~a -> ~a~%" ency ent)
       (pushnew ent (gethash ency dependents nil))
       (pushnew ency (gethash ent dependencies nil)))))
+
 (defun remove-dependency (graph dependency-id dependent-id)
   (with-slots (dependents dependencies)
       graph
@@ -106,7 +152,7 @@
 	(gethash id taskmap)
       (unless present-p
 	(return-from remove-task))
-      (setf tasks (delete value tasks))
+      (setf tasks (remove value tasks))
       (remhash id taskmap)
       (dolist (task tasks)
 	(remove-dependency graph value task)
@@ -148,7 +194,7 @@
 	  (push m s))))))
 
 (defun make-testing-graph ()
-  (let ((graph (make-graph)))
+  (let ((graph (make-graph #'make-task)))
     (insert-task graph (make-task 'build-foundation))
     (insert-task graph (make-task 'build-walls))
     (insert-task graph (make-task 'build-roof))
