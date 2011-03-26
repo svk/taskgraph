@@ -80,11 +80,15 @@
 (defmacro bless-task-constructor (name fobj)
   `(setf (gethash ,name *blessed-task-constructors*) ,fobj))
 
-(bless-task-constructor 'task #'make-task)
-(bless-task-constructor 'mtask #'make-mtask)
+(bless-task-constructor :task #'make-task)
+(bless-task-constructor :mtask #'make-mtask)
 
 (defun get-blessed-constructor (fsym)
-  (gethash fsym *blessed-task-constructors*))
+  (multiple-value-bind (value present-p)
+      (gethash fsym *blessed-task-constructors*)
+    (if present-p
+	value
+	(error (format nil "no such (blessed) task constructor: ~a" fsym)))))
 
 (defclass graph ()
   ((tasks :initform nil)
@@ -149,6 +153,14 @@
 (defun graph-task-ids-matching (graph string)
   (remove-if-not #'(lambda (sym) (symbol-matches sym string))
 		 (graph-task-ids graph)))
+
+(defun get-task-ids (graph &key (secrecy nil) (match nil))
+  (remove-if (lambda-some-predicate (forbid-secrecy secrecy))
+	     (if match
+		 (graph-task-ids-matching graph match)
+		 (graph-task-ids graph))
+	     :key #'(lambda (task-id)
+		      (graph-task graph task-id))))
 
 (defun serialize-edges (graph)
   (with-slots (tasks dependencies constructor)
@@ -460,7 +472,7 @@
   (remove-dependency graph alpha gamma))
 
 (defun make-testing-graph ()
-  (let ((graph (make-graph #'make-task)))
+  (let ((graph (make-graph :task)))
     (insert-task graph (make-task 'build-foundation))
     (insert-task graph (make-task 'build-walls))
     (insert-task graph (make-task 'build-roof))
@@ -484,7 +496,7 @@
     (add-dependency graph 'move-in 'invite-neighbours-to-dinner)
     graph))
 
-(defun run-tests (graph)
+(defun run-graph-tests (graph)
   (list
    (get-graph-problems graph)
    (get-starting-tasks graph)
