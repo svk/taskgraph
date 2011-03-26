@@ -5,9 +5,15 @@
 (defclass task ()
   ((id :initarg :id
        :reader task-id)
+   (passive :initform nil
+	    :initarg :passive
+	    :accessor task-passive)
+   (secrecy :initform nil
+	    :initarg :secrecy
+	    :accessor task-secrecy)
    (epsilon :initform nil
 	    :initarg :epsilon
-	    :reader task-is-epsilon?)))
+	    :accessor task-epsilon)))
 
 (defclass mtask (task)
   ((name :initarg :name
@@ -19,21 +25,57 @@
 (defmethod print-object ((mtask mtask) stream)
   (format stream "[~a: ~a]" (task-id mtask) (mtask-name mtask)))
 
-(defun make-task (id &key (epsilon nil))
-  (make-instance 'task :id id :epsilon epsilon))
+(defun make-task (id &rest rest)
+  (apply #'make-instance (append (list 'task
+				       :id id)
+				 rest)))
+
+(defun secrecy-leq (alpha beta)
+  (cond ((null alpha) t)
+	((null beta) nil)	
+	((eq t beta) t)
+	((eq t alpha) nil)
+	(t (<= alpha beta))))
+
+(defun allow-secrecy (threshold)
+  #'(lambda (task)
+      (secrecy-leq (task-secrecy task) threshold)))
+
+(defun forbid-secrecy (threshold)
+  #'(lambda (task)
+      (not (secrecy-leq (task-secrecy task) threshold))))
+
+(defun task-kwargs (task)
+  (let ((rv nil))
+    (when (task-passive task)
+      (push t rv)
+      (push :passive rv))
+    (when (task-secrecy task)
+      (push (task-secrecy task) rv)
+      (push :secrecy rv))
+    (when (task-epsilon task)
+      (push t rv)
+      (push :epsilon rv))
+    rv))
 
 (defmethod serialize ((mtask mtask))
   (with-slots (id name epsilon)
       mtask
-    (list id name :epsilon epsilon)))
+    (append
+     (list id name)
+     (task-kwargs mtask))))
 
 (defmethod serialize ((task task))
   (with-slots (id epsilon)
       task
-    (list id epsilon)))
+    (cons id
+	  (task-kwargs task))))
 
-(defun make-mtask (id name &key (epsilon nil))
-  (make-instance 'mtask :id id :name name :epsilon epsilon))
+(defun make-mtask (id name &rest rest)
+  (apply #'make-instance (append (list 'mtask
+				       :id id
+				       :name name)
+				 rest)))
 
 (defmacro bless-task-constructor (name fobj)
   `(setf (gethash ,name *blessed-task-constructors*) ,fobj))
@@ -53,6 +95,10 @@
    (taskmap :initform (make-hash-table)
 	    :accessor graph-taskmap)
    (constructor :initarg :constructor)))
+
+(defun depends-on? (graph alpha beta)
+  (find (graph-task graph alpha)
+	(task-dependencies graph beta)))
 
 (defun replace-element (from to list &key (test #'eql))
   (mapcar #'(lambda (x)
@@ -100,6 +146,9 @@
 	     (graph-taskmap graph))
     rv))
 
+(defun graph-task-ids-matching (graph string)
+  (remove-if-not #'(lambda (sym) (symbol-matches sym string))
+		 (graph-task-ids graph)))
 
 (defun serialize-edges (graph)
   (with-slots (tasks dependencies constructor)
@@ -220,6 +269,9 @@
     (let ((task (graph-task graph id)))
       (gethash task dependents nil))))
 
+(defun symbol-matches (sym string)
+  (search string (symbol-name sym) :test #'char-equal))
+
 (defun add-dependency (graph dependency-id dependent-id)
   (with-slots (dependents dependencies)
       graph
@@ -246,7 +298,8 @@
       (when present-p
 	(error (format nil "task collision: ~a (old) vs ~a (new)" value task)))
       (setf (gethash (task-id task) taskmap) task)
-      (push task tasks))))
+      (push task tasks)
+      nil)))
 
 (defun remove-task (graph id)
   (with-slots (tasks taskmap)
@@ -268,20 +321,57 @@
     (with-slots (dependencies)
 	graph
       (let ((result (remove-if
-		     #'(lambda (dep) (and (task-is-epsilon? dep)
+		     #'(lambda (dep) (and (task-epsilon dep)
 					  (null (find dep u-d-stack))
 					  (null (unmet-dependencies graph dep))))
 		     (gethash task dependencies))))
 	(pop u-d-stack)
 	result))))
 
-(defun get-starting-tasks (graph)
+(defun lambda-some-predicate (&rest predicates)
+  "Creates a lambda predicate that returns non-nil iff at least one predicate passed as an argument is true for the argument to the lambda. Ignores NIL predicates. The actual value returned is the predicate that was true."
+  #'(lambda (element)
+      (block some-predicate-block
+	(dolist (predicate predicates)
+	  (when predicate
+	    (when (funcall predicate element)
+	      (return-from some-predicate-block predicate))))
+	nil)))
+
+(defun lambda-no-predicate (&rest predicates)
+  "Creates a lambda predicate that returns non-nil iff none of the predicates passed as arguments were true for the argument to the lambda. Ignores NIL predicates."
+  #'(lambda (element)
+      (block some-predicate-block
+	(dolist (predicate predicates)
+	  (when predicate
+	    (when (funcall predicate element)
+	      (return-from some-predicate-block nil))))
+	t)))
+
+(defun lambda-every-predicate (&rest predicates)
+  "Creates a lambda predicate that returns non-nil iff every predicate passed as an argument was true for the argument to the lambda. Ignores NIL predicates."
+  #'(lambda (element)
+      (block some-predicate-block
+	(dolist (predicate predicates)
+	  (when predicate
+	    (unless (funcall predicate element)
+	      (return-from some-predicate-block nil))))
+	t)))
+
+(defun get-starting-tasks (graph &key (epsilon nil) (passive nil) (secrecy nil) (no-censor nil))
   "Get the set of tasks that have no unmet dependencies."
   (with-slots (tasks dependencies)
       graph
-    (remove-if #'task-is-epsilon?
-	       (remove-if #'(lambda (task) (unmet-dependencies graph task))
-			  tasks))))
+    (let ((rv (remove-if #'(lambda (task) (unmet-dependencies graph task))
+			 tasks)))
+      (if no-censor
+	  rv
+	  (remove-if (lambda-some-predicate (if (not epsilon)
+						#'task-epsilon)
+					    (if (not passive)
+						#'task-passive)
+					    (forbid-secrecy secrecy))
+		     rv)))))
 
 (defun take-until (element list &key (test #'eql))
   (if (funcall test element (car list))
@@ -326,23 +416,48 @@
       (push :has-cycle rv))
     rv))
 
-(defun get-task-ordering (graph)
+(defun get-task-ordering (graph &key (passive t) (secrecy nil))
   "Get a topologically sorted ordering of the tasks in the graph. If there are cycles in the graph, this method will return an incomplete list of tasks, accomplishing as much as can be done without entering the cycles."
-  (do ((removed-dependents (make-hash-table))
-       (removed-dependencies (make-hash-table))
-       (l nil)
-       (s (get-starting-tasks graph)))
-      ((null s) (reverse l))
-    (let ((n (pop s)))
-      (unless (task-is-epsilon? n)
-	(push n l))
-      (dolist (m (set-difference (task-dependents graph (task-id n))
-				 (gethash (task-id n) removed-dependents)))
-	(push m (gethash (task-id n) removed-dependents))
-	(push n (gethash (task-id m) removed-dependencies))
-	(unless (set-difference (task-dependencies graph (task-id m))
-				(gethash (task-id m) removed-dependencies))
-	  (push m s))))))
+  ;; The putting-off of passive tasks until last could be improved. Should
+  ;; select just one that ensures progress, if that doesn't exist, then two,
+  ;; then three, and so on, before adding them all.
+  (let* ((passive-s nil)
+	 (censor? (lambda-some-predicate (forbid-secrecy secrecy)
+					 (if (not passive)
+					     #'task-passive)))
+	 (s (remove-if censor? (get-starting-tasks graph :no-censor t))))
+    (setf passive-s (remove-if-not #'task-passive s))
+    (setf s (remove-if #'task-passive s))
+    (do ((removed-dependents (make-hash-table))
+	  (removed-dependencies (make-hash-table))
+	  (l nil))
+	 ((and (null s)
+	       (null passive-s))
+	  (reverse l))
+      (when (null s)
+	(dolist (n passive-s)
+	  (push n s))
+	(setf passive-s nil))
+      (let ((n (pop s)))
+	(unless (task-epsilon n)
+	  (push n l))
+	(dolist (m (set-difference (task-dependents graph (task-id n))
+				   (gethash (task-id n) removed-dependents)))
+	  (push m (gethash (task-id n) removed-dependents))
+	  (push n (gethash (task-id m) removed-dependencies))
+	  (unless (set-difference (task-dependencies graph (task-id m))
+				  (gethash (task-id m) removed-dependencies))
+	    (unless (funcall censor? m)
+	      (if (task-passive m)
+		  (push m passive-s)
+		  (push m s)))))))))
+
+(defun interpose-dependency (graph alpha beta gamma)
+  (unless (depends-on? graph alpha gamma)
+    (error "invalid dependency interposition"))
+  (add-dependency graph alpha beta)
+  (add-dependency graph beta gamma)
+  (remove-dependency graph alpha gamma))
 
 (defun make-testing-graph ()
   (let ((graph (make-graph #'make-task)))
