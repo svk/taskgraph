@@ -1,0 +1,5 @@
+A task-planning system which stores tasks in an otherwise
+unrestricted directed graph. Includes various features for
+REPL querying convenience and privacy. CLOS subclassing
+may be used to tailor the sorts of tasks stored to the
+application.
