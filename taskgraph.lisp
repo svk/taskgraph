@@ -30,6 +30,9 @@
 				       :id id)
 				 rest)))
 
+(defun ~ (pathname)
+  (merge-pathnames pathname (user-homedir-pathname)))
+
 (defun secrecy-leq (alpha beta)
   (cond ((null alpha) t)
 	((null beta) nil)	
