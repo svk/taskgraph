@@ -32,7 +32,6 @@
       task
     (list id epsilon)))
 
-
 (defun make-mtask (id name &key (epsilon nil))
   (make-instance 'mtask :id id :name name :epsilon epsilon))
 
@@ -46,8 +45,7 @@
   (gethash fsym *blessed-task-constructors*))
 
 (defclass graph ()
-  ((tasks :initform nil
-	  :accessor graph-tasks)
+  ((tasks :initform nil)
    (dependencies :initform (make-hash-table)
 		 :accessor graph-dependencies)
    (dependents :initform (make-hash-table)
@@ -55,6 +53,53 @@
    (taskmap :initform (make-hash-table)
 	    :accessor graph-taskmap)
    (constructor :initarg :constructor)))
+
+(defun replace-element (from to list &key (test #'eql))
+  (mapcar #'(lambda (x)
+	      (if (funcall test from x)
+		  to
+		  x))
+	  list))
+
+(defun rename-task (graph from-id to-id)
+  (let ((task-ids (graph-task-ids graph)))
+    (unless (and (not (find to-id task-ids))
+		 (find from-id task-ids)
+		 (not (eq from-id to-id)))
+      (error "invalid rename"))
+    (with-slots (taskmap dependents dependencies)
+	graph
+      (maphash #'(lambda (key value)
+		   (declare (ignore value))
+		   (setf (gethash key dependents)
+			 (replace-element from-id to-id (gethash key dependents))))
+	       dependents)
+      (maphash #'(lambda (key value)
+		   (declare (ignore value))
+		   (setf (gethash key dependencies)
+			 (replace-element from-id to-id (gethash key dependencies))))
+	       dependencies)
+      (let ((temp-dependents (gethash from-id dependents))
+	    (temp-dependencies (gethash to-id dependencies))
+	    (task (graph-task graph from-id)))
+	(with-slots (id)
+	    task
+	  (setf id to-id))
+	(remhash from-id taskmap)
+	(remhash from-id dependents)
+	(remhash from-id dependencies)
+	(setf (gethash to-id taskmap) task
+	      (gethash to-id dependents) temp-dependents
+	      (gethash to-id dependencies) temp-dependencies)))))
+  
+(defun graph-task-ids (graph)
+  (let ((rv nil))
+    (maphash #'(lambda (key task)
+		 (declare (ignore task))
+		 (push key rv))
+	     (graph-taskmap graph))
+    rv))
+
 
 (defun serialize-edges (graph)
   (with-slots (tasks dependencies constructor)
@@ -105,6 +150,7 @@
   (with-slots (constructor)
       graph
     (insert-task graph (apply (get-blessed-constructor constructor) rest))))
+
 
 (defun unserialize-graph (serialized-graph)
   (let* ((task-maker-name (car serialized-graph))
@@ -243,20 +289,23 @@
       (cons (car list) (take-until element (cdr list) :test test))))
 
 (defun graph-find-cycle (graph &optional (exclude nil))
-  (let ((nodes (nset-difference (mapcar #'task-id (graph-tasks graph))
-				exclude))
-	(cycle nil))
-    (labels ((explore (node)
-	       (when (find node cycle)
-		 (return-from graph-find-cycle (take-until node cycle)))
-	       (push node cycle)
-	       (dolist (dep (mapcar #'task-id (task-dependencies graph node)))
-		 (unless (not (find dep nodes))
-		   (explore dep)))
-	       (setf nodes (remove node nodes))
-	       (pop cycle)))
-      (mapcar #'explore nodes)
-      nil)))
+  (with-slots (tasks)
+      graph
+    (let ((nodes (nset-difference (mapcar #'task-id tasks)
+				  exclude))
+	  (cycle nil))
+      (labels ((explore (node)
+		 (when (find node cycle)
+		   (return-from graph-find-cycle (take-until node cycle)))
+		 (push node cycle)
+		 (dolist (dep (mapcar #'task-id (task-dependencies graph node)))
+		   (unless (not (find dep nodes))
+		     (explore dep)))
+		 (setf nodes (remove node nodes))
+		 (pop cycle)))
+	(dolist (node nodes)
+	  (explore node))
+	nil))))
 
 (defun graph-find-cycles (graph)
   "This function behaves a bit arbitrarily on interlocking cycles, only ever reporting a node as part of zero or one cycles, but determines distinct cycles accurately."
