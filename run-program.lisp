@@ -15,8 +15,8 @@
 	      (and output-to-string output-to-stream))
       (error "illegal arguments to run-program: duplicated input or output"))
     (let ((standard-args (list :search search
-			       :pty t
-			       :wait nil)))
+			       :error nil
+			       :wait t)))
       (flet ((run (input-args)
 	       (cond (output-to-string
 		      (with-output-to-string (stream)

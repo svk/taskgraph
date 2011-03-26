@@ -90,6 +90,14 @@
   (with-open-file (stream filename :direction :output :if-exists :overwrite)
     (write (serialize graph) :stream stream)))
 
+(defun write-graph-to-crypto-file (graph filename recipient)
+  (with-open-file (stream filename :direction :output :if-exists :overwrite)
+    (princ 
+     (cl-gpgi:simple-encrypt-to (with-output-to-string (stringstream)
+				  (write (serialize graph) :stream stringstream))
+				recipient)
+     stream)))
+
 (defun make-graph (constructor-name)
   (make-instance 'graph :constructor constructor-name))
 
@@ -112,17 +120,47 @@
   (with-open-file (stream filename)
     (unserialize-graph (read stream))))
 
+(defun file-string (path)
+  "Sucks up an entire file from PATH into a freshly-allocated string,
+      returning two values: the string and the number of bytes read."
+  (with-open-file (s path)
+    (let* ((len (file-length s))
+           (data (make-string len)))
+      (values data (read-sequence data s)))))
+
+(defun read-graph-from-crypto-file (filename)
+  (with-open-file (stream filename :direction :input)
+    (with-input-from-string (dstream (cl-gpgi:simple-decrypt stream))
+      (unserialize-graph (read dstream)))))
+
 (defmacro with-graph-in-file (args &body body)
   (let* ((gs (car args))
+	 (rvs (gensym))
 	 (fn (cadr args)))
     `(let ((,gs (read-graph-from-file ,fn)))
        (unwind-protect
-	    (progn
-	      ,@body
-	      (write-graph-to-file ,gs ,fn))))))
+	    (let ((,rvs (progn ,@body)))
+	      (write-graph-to-file ,gs ,fn)
+	      ,rvs)))))
+
+(defmacro with-graph-in-crypto-file (args &body body)
+  (let* ((gs (car args))
+	 (rvs (gensym))
+	 (fn (cadr args))
+	 (rc (caddr args)))
+    `(let ((,gs (read-graph-from-crypto-file ,fn)))
+       (unwind-protect
+	    (let ((,rvs (progn ,@body)))
+	      (write-graph-to-crypto-file ,gs ,fn ,rc)
+	      ,rvs)))))
+    
     
 (defun graph-task (graph id)
-  (gethash id (graph-taskmap graph)))
+  (multiple-value-bind (value present-p)
+      (gethash id (graph-taskmap graph))
+    (if present-p
+	value
+	(error (format nil "no such task: ~a" id)))))
 
 (defun task-dependencies (graph id)
   (with-slots (dependencies)
@@ -172,11 +210,11 @@
       (unless present-p
 	(return-from remove-task))
       (setf tasks (remove value tasks))
-      (remhash id taskmap)
       (dolist (task tasks)
-	(remove-dependency graph value task)
-	(remove-dependency graph task value))
-      value)))
+	(remove-dependency graph (task-id value) (task-id task))
+	(remove-dependency graph (task-id task) (task-id value)))
+      (remhash id taskmap))))
+
 
 (let ((u-d-stack nil))
   (defun unmet-dependencies (graph task)

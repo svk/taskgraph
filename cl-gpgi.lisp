@@ -1,56 +1,56 @@
 (in-package #:cl-gpgi)
 
 (defparameter *gpg-binary* #P"/usr/bin/gpg")
-(defparameter *use-gpg-agent* nil)
+(defparameter *use-gpg-agent* t)
 (defparameter *use-armored-output* t)
 
 (defconstant +max-passphrase-length+ 4096)
 
-(defstruct passphrase-cache
-  (has-passphrase? nil)
-  (length nil)
-  (data (make-array (list +max-passphrase-length+)
-		    :element-type 'character)))
+(defun make-passphrase-cache ()
+  (let* ((has-passphrase nil)
+	 (length nil)
+	 (N +max-passphrase-length+)
+	 (data (make-array (list N)
+			  :element-type 'character)))
+    (labels ((clear ()
+	       (setf has-passphrase nil
+		     length nil)
+	       (dotimes (i N)
+		 (setf (aref data i) #\@))
+	       nil)
+	     (begin ()
+	       (clear)
+	       (setf length 0)
+	       nil)
+	     (output (stream)
+	       (when (not has-passphrase)
+		 (error "no cached passphrase"))
+	       (dotimes (i length)
+		 (princ (aref data i) stream)
+		 nil))
+	     (has ()
+	       has-passphrase)
+	     (complete ()
+	       (setf has-passphrase t)
+	       nil)
+	     (appendc (ch)
+	       (when (>= length N)
+		 (clear)
+		 (error "passphrase too long"))
+	       (setf (aref data length) ch)
+	       (incf length)
+	       nil))
+      #'(lambda (name &rest rest)
+	  (apply (case name
+		   (:clear #'clear)
+		   (:begin #'begin)
+		   (:output #'output)
+		   (:complete #'complete)
+		   (:has #'has)
+		   (:append #'appendc))
+		 rest)))))
 
 (defparameter *passphrase-cache* (make-passphrase-cache))
-
-(defun passphrase-cache-clear (pc)
-  (with-slots (length data has-passphrase?)
-      pc
-    (setf has-passphrase? nil)
-    (setf length nil)
-    (dotimes (i +max-passphrase-length+)
-      (setf (aref data i) #\@))))
-
-(defun passphrase-cache-begin (pc)
-  (with-slots (length)
-      pc
-    (passphrase-cache-clear pc)
-    (setf length 0)))
-
-(defun passphrase-cache-write (pc stream)
-  (with-slots (has-passphrase? length data)
-      pc
-    (when (not has-passphrase?)
-      (error "no cached passphrase"))
-    (dotimes (i (passphrase-cache-length pc))
-      (princ (aref data i) stream)
-      nil)))
-  
-(defun passphrase-cache-append (pc ch)
-  (with-slots (length data)
-      pc
-    (when (>= length +max-passphrase-length+)
-      (passphrase-cache-clear pc)
-      (error "passphrase too long"))
-    (setf (aref data length) ch)
-    (incf length)
-    nil))
-
-(defun passphrase-cache-complete (pc)
-  (with-slots (has-passphrase?)
-      pc
-    (setf has-passphrase? t)))
 
 (defun make-base-gpg-cmd ()
   (let ((rv nil))
@@ -69,10 +69,17 @@
 	 rest))
 
 (defun run-gpg (input &rest rest)
-  (run-program (apply #'make-gpg-cmd rest)
-	       :search nil
-	       :input-from-string input
-	       :output-to-string t))
+  (cond ((streamp input)
+	 (run-program (apply #'make-gpg-cmd rest)
+		      :search nil
+		      :input-from-stream input
+		      :output-to-string t))
+	((stringp input)
+	 (run-program (apply #'make-gpg-cmd rest)
+		      :search nil
+		      :input-from-string input
+		      :output-to-string t))
+	(t (error "input was not string or stream"))))
 
 (defun simple-encrypt-to (data recipient)
   (run-gpg data
@@ -83,9 +90,6 @@
 (defun simple-decrypt (data)
   (run-gpg data
 	   "--decrypt"))
-	   
-			     
-
 
 
 	    

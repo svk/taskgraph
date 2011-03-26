@@ -1,3 +1,4 @@
 (defpackage :cl-gpgi
   (:use :common-lisp)
-  (:export))
+  (:export simple-encrypt-to
+	   simple-decrypt))
