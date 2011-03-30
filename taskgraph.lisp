@@ -5,39 +5,17 @@
 (defclass task ()
   ((id :initarg :id
        :reader task-id)
+   (passive :initform nil
+	    :initarg :passive
+	    :accessor task-passive)
    (secrecy :initform nil
-	    :initarg :secrecy)))
-
-(defclass std-task (task)
-  ((passive :initform nil
-	    :initarg passive)
+	    :initarg :secrecy
+	    :accessor task-secrecy)
    (epsilon :initform nil
-	    :initarg :epsilon)))
+	    :initarg :epsilon
+	    :accessor task-epsilon)))
 
-(defmethod task-passive ((task task))
-  (declare (ignore task))
-  nil)
-
-(defmethod task-epsilon ((task task))
-  (declare (ignore task))
-  nil)
-
-(defmethod task-passive ((task std-task))
-  (with-slots (passive)
-      task
-    passive))
-
-(defmethod task-secrecy ((task task))
-  (with-slots (secrecy)
-      task
-    secrecy))
-
-(defmethod task-epsilon ((task std-task))
-  (with-slots (epsilon)
-      task
-    epsilon))
-
-(defclass mtask (std-task)
+(defclass mtask (task)
   ((name :initarg :name
 	 :accessor mtask-name)))
 
@@ -47,8 +25,8 @@
 (defmethod print-object ((mtask mtask) stream)
   (format stream "[~a: ~a]" (task-id mtask) (mtask-name mtask)))
 
-(defun make-std-task (id &rest rest)
-  (apply #'make-instance (append (list 'std-task
+(defun make-task (id &rest rest)
+  (apply #'make-instance (append (list 'task
 				       :id id)
 				 rest)))
 
@@ -105,7 +83,7 @@
 (defmacro bless-task-constructor (name fobj)
   `(setf (gethash ,name *blessed-task-constructors*) ,fobj))
 
-(bless-task-constructor :task #'make-std-task)
+(bless-task-constructor :task #'make-task)
 (bless-task-constructor :mtask #'make-mtask)
 
 (defun get-blessed-constructor (fsym)
@@ -115,7 +93,7 @@
 	value
 	(error (format nil "no such (blessed) task constructor: ~a" fsym)))))
 
-(defclass graph (task)
+(defclass graph ()
   ((tasks :initform nil)
    (dependencies :initform (make-hash-table)
 		 :accessor graph-dependencies)
@@ -124,20 +102,6 @@
    (taskmap :initform (make-hash-table)
 	    :accessor graph-taskmap)
    (constructor :initarg :constructor)))
-
-(defmethod task-epsilon ((task graph))
-  (with-slots (tasks)
-      task
-    (null graph)))
-
-(defmethod task-passive ((task graph))
-  (every #'task-passive (get-starting-tasks task :no-censor t)))
-
-(defmethod print-object ((task graph) stream)
-  (with-slots (tasks)
-      task
-    (let ((starting-tasks (get-starting-tasks task)))
-      (format stream "[~a : ~a and ~a more task(s)]" (task-id task) starting-tasks (- (length tasks) (length starting-tasks))))))
 
 (defun depends-on? (graph alpha beta)
   (find (graph-task graph alpha)
@@ -512,13 +476,13 @@
 
 (defun make-testing-graph ()
   (let ((graph (make-graph :task)))
-    (insert-task graph (make-std-task 'build-foundation))
-    (insert-task graph (make-std-task 'build-walls))
-    (insert-task graph (make-std-task 'build-roof))
-    (insert-task graph (make-std-task 'paint-house-outside))
-    (insert-task graph (make-std-task 'paint-house-inside))
-    (insert-task graph (make-std-task 'furnish-house))
-    (insert-task graph (make-std-task 'move-in))
+    (insert-task graph (make-task 'build-foundation))
+    (insert-task graph (make-task 'build-walls))
+    (insert-task graph (make-task 'build-roof))
+    (insert-task graph (make-task 'paint-house-outside))
+    (insert-task graph (make-task 'paint-house-inside))
+    (insert-task graph (make-task 'furnish-house))
+    (insert-task graph (make-task 'move-in))
 
     (add-dependency graph 'build-foundation 'build-walls)
     (add-dependency graph 'build-walls 'build-roof)
@@ -530,8 +494,8 @@
 
     (add-dependency graph 'move-in 'build-foundation)
 
-    (insert-task graph (make-std-task 'meet-neighbours))
-    (insert-task graph (make-std-task 'invite-neighbours-to-dinner))
+    (insert-task graph (make-task 'meet-neighbours))
+    (insert-task graph (make-task 'invite-neighbours-to-dinner))
     (add-dependency graph 'move-in 'invite-neighbours-to-dinner)
     graph))
 
