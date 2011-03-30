@@ -7,7 +7,6 @@
        :reader task-id)
    (secrecy :initform nil
 	    :initarg :secrecy)))
-   
 
 (defclass std-task (task)
   ((passive :initform nil
@@ -127,10 +126,18 @@
    (constructor :initarg :constructor)))
 
 (defmethod task-epsilon ((task graph))
-  (null (graph-tasks task)))
+  (with-slots (tasks)
+      task
+    (null graph)))
+
+(defmethod task-passive ((task graph))
+  (every #'task-passive (get-starting-tasks task :no-censor t)))
 
 (defmethod print-object ((task graph) stream)
-  (format stream "[~a : ~a]" (task-id task) (get-starting-tasks task)))
+  (with-slots (tasks)
+      task
+    (let ((starting-tasks (get-starting-tasks task)))
+      (format stream "[~a : ~a and ~a more task(s)]" (task-id task) starting-tasks (- (length tasks) (length starting-tasks))))))
 
 (defun depends-on? (graph alpha beta)
   (find (graph-task graph alpha)
