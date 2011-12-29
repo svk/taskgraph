@@ -228,7 +228,8 @@
 
 (defun read-graph-from-file (filename)
   (with-open-file (stream filename)
-    (unserialize-graph (read stream))))
+    (let ((*read-eval* nil))
+      (unserialize-graph (read stream)))))
 
 (defun file-string (path)
   "Sucks up an entire file from PATH into a freshly-allocated string,
@@ -241,7 +242,8 @@
 (defun read-graph-from-crypto-file (filename)
   (with-open-file (stream filename :direction :input)
     (with-input-from-string (dstream (cl-gpgi:simple-decrypt stream))
-      (unserialize-graph (read dstream)))))
+      (let ((*read-eval* nil))
+	(unserialize-graph (read dstream))))))
 
 (defmacro with-graph-in-file (args &body body)
   (let* ((gs (car args))
